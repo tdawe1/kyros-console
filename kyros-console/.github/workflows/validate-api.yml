@@ -1,0 +1,60 @@
+name: Validate API
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn pydantic pydantic-settings PyYAML openapi-spec-validator httpx aiosqlite PyJWT
+      - name: Generate dev JWT
+        run: |
+          python - <<'PY' > dev.env
+          import datetime, jwt
+          token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
+          print(f'DEV_JWT={token}')
+          PY
+          cat dev.env >> "$GITHUB_ENV"
+      - name: Start orchestrator
+        run: |
+          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH}"
+          (cd apps/adk-orchestrator && PYTHONPATH="${PYTHONPATH}" uvicorn main:app --host 127.0.0.1 --port 8080) > uvicorn.log 2>&1 &
+          echo $! > uvicorn.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+              echo "Orchestrator health check passed"
+              break
+            fi
+            echo "Waiting for orchestrator... ($i/30)"
+            sleep 1
+          done
+          if ! curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+            echo "Orchestrator health check failed after 30 seconds"
+            echo "=== Uvicorn logs ==="
+            cat uvicorn.log || echo "No uvicorn.log found"
+            exit 1
+          fi
+      - name: Validate schema
+        run: |
+          openapi-spec-validator api-specs/orchestrator-v1.yaml
+      - name: Test generated spec matches
+        run: |
+          curl -fsS http://127.0.0.1:8080/openapi.json -H "Authorization: Bearer $DEV_JWT" > /tmp/runtime.json
+          python -c "
+          import json, yaml
+          runtime = json.load(open('/tmp/runtime.json'))
+          spec = yaml.safe_load(open('api-specs/orchestrator-v1.yaml'))
+          assert runtime == spec, 'Runtime OpenAPI does not match spec file'
+          "
+      - name: Stop
+        if: always()
+        run: kill $(cat uvicorn.pid) || true
