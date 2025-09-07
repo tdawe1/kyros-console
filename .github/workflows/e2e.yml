@@ -11,41 +11,56 @@ jobs:
     env:
       NEXT_TELEMETRY_DISABLED: '1'
       CI: '1'
-      KYROS_DEV_BEARER: dev-bearer
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with:
+          node-version: '20'
+
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r apps/adk-orchestrator/requirements.txt
-          cd apps/console && npm ci
+          pip install -r apps/adk-orchestrator/requirements.txt PyJWT
+          cd apps/console && npm ci --include=dev
+
       - name: Install Playwright
         run: |
           cd apps/console && npx playwright install --with-deps
+
+      - name: Generate dev JWT
+        run: |
+          python - <<'PY' > dev.env
+          import datetime, jwt
+          token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
+          print(f'DEV_JWT={token}')
+          print(f'NEXT_PUBLIC_DEV_BEARER={token}')
+          PY
+          cat dev.env >> "$GITHUB_ENV"
+
       - name: Start services
         run: |
-          (cd apps/adk-orchestrator && uvicorn main:app --host 0.0.0.0 --port 8080) &
+          uvicorn apps/adk-orchestrator.main:app --host 127.0.0.1 --port 8080 &
           echo $! > uvicorn.pid
           (cd apps/console && PORT=3001 npm run dev) &
           echo $! > console.pid
-          # Wait for backend health
+
+          # wait for orchestrator
           for i in {1..40}; do
-            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
-              break
-            fi
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then break; fi
             sleep 1
           done
-          # Wait for frontend
+
+          # wait for console
           for i in {1..60}; do
-            if curl -fsS http://127.0.0.1:3001/ >/dev/null; then
-              break
-            fi
+            if curl -fsS http://127.0.0.1:3001 >/dev/null; then break; fi
             sleep 1
           done
+
       - name: Smoke test – click "Run Plan"
         run: |
           cat > apps/console/e2e.spec.ts <<'TS'
@@ -59,6 +74,7 @@ jobs:
           });
           TS
           cd apps/console && npx playwright test e2e.spec.ts --reporter=list
+
       - name: Stop
         if: always()
         run: |
