@@ -14,5 +14,7 @@ auth:
 tenancy:
   default_rate_rps: 5
   default_model_caps: {}
+rate_limits:
+  default: "5/second"
 cors:
   allowed_origins: ["http://localhost:3001"]
