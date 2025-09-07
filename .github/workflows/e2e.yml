@@ -36,26 +36,48 @@ print(f'NEXT_PUBLIC_DEV_BEARER={token}')
 PY
       - name: Start services
         run: |
+          echo "Starting orchestrator..."
           cd apps/adk-orchestrator && uvicorn main:app --host 127.0.0.1 --port 8080 &
-          echo $! > uvicorn.pid
+          echo $! > ../../uvicorn.pid
+          cd ../..
+          
+          echo "Starting console..."
           (cd apps/console && PORT=3001 npm run dev) &
           echo $! > console.pid
+          
+          echo "Starting terminal daemon..."
           (cd apps/terminal-daemon && node server.js) &
           echo $! > daemon.pid
-          # Wait for orchestrator
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-          # Wait for console
+          
+          echo "Waiting for orchestrator to start..."
           for i in {1..60}; do
-            if curl -fsS http://127.0.0.1:3001 >/dev/null; then
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+              echo "Orchestrator started successfully after ${i} seconds"
               break
             fi
+            echo "Attempt ${i}/60: Orchestrator not ready yet..."
             sleep 1
           done
+          
+          if ! curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+            echo "❌ Orchestrator failed to start"
+            exit 1
+          fi
+          
+          echo "Waiting for console to start..."
+          for i in {1..90}; do
+            if curl -fsS http://127.0.0.1:3001 >/dev/null 2>&1; then
+              echo "Console started successfully after ${i} seconds"
+              break
+            fi
+            echo "Attempt ${i}/90: Console not ready yet..."
+            sleep 1
+          done
+          
+          if ! curl -fsS http://127.0.0.1:3001 >/dev/null 2>&1; then
+            echo "❌ Console failed to start"
+            exit 1
+          fi
       - name: Smoke test – click "Run Plan"
         run: |
           cat > apps/console/e2e.spec.ts <<'TS'
