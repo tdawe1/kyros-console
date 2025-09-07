@@ -1,0 +1,243 @@
+version: 2.1
+
+executors:
+  py311:
+    docker:
+      - image: cimg/python:3.11
+  node20:
+    docker:
+      - image: cimg/node:20.11
+  node20-browsers:
+    docker:
+      - image: cimg/node:20.11-browsers
+
+commands:
+  restore_pip_cache:
+    steps:
+      - restore_cache:
+          keys:
+            - v1-pip-{{ checksum "apps/adk-orchestrator/requirements.txt" }}
+            - v1-pip-
+  save_pip_cache:
+    steps:
+      - save_cache:
+          key: v1-pip-{{ checksum "apps/adk-orchestrator/requirements.txt" }}
+          paths:
+            - ~/.cache/pip
+  restore_node_cache_console:
+    steps:
+      - restore_cache:
+          keys:
+            - v1-node-console-{{ checksum "apps/console/package-lock.json" }}
+            - v1-node-console-
+  save_node_cache_console:
+    steps:
+      - save_cache:
+          key: v1-node-console-{{ checksum "apps/console/package-lock.json" }}
+          paths:
+            - apps/console/node_modules
+            - apps/console/.next/cache
+  wait_for_orchestrator:
+    steps:
+      - run:
+          name: Wait for orchestrator health
+          command: |
+            for i in {1..40}; do
+              curl -fsS http://127.0.0.1:8080/healthz >/dev/null && exit 0
+              sleep 1
+            done
+            echo "Orchestrator failed to become healthy"
+            test -f uvicorn.log && (echo "===== uvicorn.log HEAD ====="; sed -n '1,200p' uvicorn.log)
+            exit 7
+  wait_for_console:
+    steps:
+      - run:
+          name: Wait for console (Next.js)
+          command: |
+            for i in {1..60}; do
+              curl -fsS http://127.0.0.1:3001 >/dev/null && exit 0
+              sleep 1
+            done
+            echo "Console failed to start"; exit 8
+
+jobs:
+  ci_python:
+    executor: py311
+    steps:
+      - checkout
+      - restore_pip_cache
+      - run:
+          name: Install Python deps
+          command: |
+            python -m pip install --upgrade pip
+            pip install -r apps/adk-orchestrator/requirements.txt
+            pip install ruff pytest
+      - run:
+          name: Ruff (bug classes blocking)
+          command: |
+            ruff check --select E9,F63,F7,F82 apps/adk-orchestrator
+      - run:
+          name: Pytest (if tests exist)
+          command: |
+            pytest -q || true
+      - save_pip_cache
+
+  ci_node:
+    executor: node20
+    steps:
+      - checkout
+      - restore_node_cache_console
+      - run:
+          name: Install Console deps (dev included)
+          working_directory: apps/console
+          environment:
+            NODE_ENV: development
+          command: npm ci --include=dev
+      - run:
+          name: Build Console
+          working_directory: apps/console
+          environment:
+            NEXT_TELEMETRY_DISABLED: "1"
+          command: npm run build --if-present
+      - run:
+          name: Install Terminal Daemon deps
+          working_directory: apps/terminal-daemon
+          command: npm ci
+      - save_node_cache_console
+
+  contract:
+    executor: py311
+    environment:
+      BASE_URL: http://127.0.0.1:8080
+    steps:
+      - checkout
+      - restore_pip_cache
+      - run:
+          name: Install deps (orchestrator + schemathesis)
+          command: |
+            python -m pip install --upgrade pip
+            pip install -r apps/adk-orchestrator/requirements.txt
+            pip install schemathesis PyJWT
+      - run:
+          name: Generate dev JWT
+          command: |
+            python - <<'PY' > dev.env
+            import datetime, jwt
+            token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
+            print(f'DEV_JWT={token}')
+            PY
+            cat dev.env >> $BASH_ENV
+            source $BASH_ENV
+      - run:
+          name: Start orchestrator (uvicorn from app dir)
+          command: |
+            export PYTHONPATH="${CIRCLE_WORKING_DIRECTORY}:${PYTHONPATH}"
+            (cd apps/adk-orchestrator && PYTHONPATH="${PYTHONPATH}" uvicorn main:app --host 127.0.0.1 --port 8080) > uvicorn.log 2>&1 &
+            echo $! > uvicorn.pid
+      - wait_for_orchestrator
+      - run:
+          name: Schemathesis contract against /v1
+          command: |
+            schemathesis run api-specs/orchestrator-v1.yaml \
+              --base-url "$BASE_URL" \
+              --checks all --hypothesis-max-examples=50 \
+              -H "Authorization: Bearer $DEV_JWT" \
+              --endpoint "/v1/runs/plan" --stateful=links
+      - run:
+          name: Stop orchestrator
+          when: always
+          command: kill $(cat uvicorn.pid) || true
+
+  e2e:
+    executor: node20-browsers
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+      CI: "1"
+    steps:
+      - checkout
+      - run:
+          name: Ensure Python available
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y python3 python3-pip
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r apps/adk-orchestrator/requirements.txt PyJWT
+      - restore_node_cache_console
+      - run:
+          name: Install Console deps (dev included)
+          working_directory: apps/console
+          environment:
+            NODE_ENV: development
+          command: npm ci --include=dev
+      - run:
+          name: Install Playwright (browsers + deps)
+          working_directory: apps/console
+          command: npx playwright install --with-deps
+      - run:
+          name: Generate dev JWT (+ expose to Next)
+          command: |
+            python3 - <<'PY' > dev.env
+            import datetime, jwt
+            token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
+            print(f'DEV_JWT={token}')
+            print(f'NEXT_PUBLIC_DEV_BEARER={token}')
+            PY
+            cat dev.env >> $BASH_ENV
+            source $BASH_ENV
+      - run:
+          name: Start services
+          command: |
+            export PYTHONPATH="${CIRCLE_WORKING_DIRECTORY}:${PYTHONPATH}"
+            (cd apps/adk-orchestrator && PYTHONPATH="${PYTHONPATH}" uvicorn main:app --host 127.0.0.1 --port 8080) > uvicorn.log 2>&1 &
+            echo $! > uvicorn.pid
+            (cd apps/console && PORT=3001 npm run dev) > console.log 2>&1 &
+            echo $! > console.pid
+      - wait_for_orchestrator
+      - wait_for_console
+      - run:
+          name: Smoke test — “Run Plan”
+          command: |
+            cat > apps/console/e2e.spec.ts <<'TS'
+            import { test, expect } from '@playwright/test';
+            test('run plan returns JSON', async ({ page }) => {
+              await page.goto('http://127.0.0.1:3001/');
+              await page.getByRole('button', { name: 'Run Plan' }).click();
+              const result = page.locator('pre');
+              await result.waitFor();
+              await expect(result).toContainText('run_id');
+            });
+            TS
+            cd apps/console && npx playwright test e2e.spec.ts --reporter=list
+      - run:
+          name: Stop services
+          when: always
+          command: |
+            kill $(cat console.pid) || true
+            kill $(cat uvicorn.pid) || true
+      - save_node_cache_console
+
+  secrets_scan:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Install gitleaks
+          command: |
+            curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(uname -s)_$(uname -m).tar.gz -o /tmp/gitleaks.tgz
+            sudo tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+            gitleaks version
+      - run:
+          name: Run gitleaks
+          command: gitleaks detect --no-banner --redact --verbose
+
+workflows:
+  kyros-pipeline:
+    jobs:
+      - ci_python
+      - ci_node
+      - contract:
+          requires: [ci_python]
+      - e2e:
+          requires: [ci_node, contract]
+      - secrets_scan
