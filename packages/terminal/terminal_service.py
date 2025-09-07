@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+
+
 class TerminalService(ABC):
     @abstractmethod
     async def open(self): ...

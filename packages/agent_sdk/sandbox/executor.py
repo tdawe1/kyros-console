@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
-from datetime import datetime
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, Field
+
 
 class ExecutionResult(BaseModel):
     """Result of code execution in sandbox."""
@@ -16,18 +18,18 @@ class ExecutionResult(BaseModel):
 
 class SandboxExecutor(ABC):
     """Abstract base class for sandbox code execution."""
-    
+
     @abstractmethod
-    async def execute(self, code: str, language: str, timeout: int = 30, 
+    async def execute(self, code: str, language: str, timeout: int = 30,
                      mem_mb: int = 512, working_dir: Optional[str] = None) -> ExecutionResult:
         """Execute code in a sandboxed environment."""
         pass
-    
+
     @abstractmethod
     async def cleanup(self) -> None:
         """Clean up any resources used by the executor."""
         pass
-    
+
     def get_supported_languages(self) -> list[str]:
         """Get list of supported programming languages."""
         return ["python", "bash", "javascript", "typescript"]

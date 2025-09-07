@@ -3,11 +3,12 @@
 Configure branch protection rules for `main` branch with these required status checks:
 
 ## Required Checks (exact names):
+- `detect`
 - `CI (python)`
 - `CI (node)`
-- `Contract`
-- `E2E`
-- `Secrets scan`
+- `contract`
+- `e2e`
+- `gitleaks`
 
 ## GitHub Settings > Branches > Add Rule
 

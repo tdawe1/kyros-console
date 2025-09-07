@@ -4,17 +4,19 @@ Hermetic test script for the orchestrator API using FastAPI TestClient
 """
 
 import sys
+
 from fastapi.testclient import TestClient
 
 # Import the FastAPI app
 from main import app
 
+
 def test_orchestrator():
     """Test the orchestrator API endpoints using TestClient"""
     client = TestClient(app)
-    
+
     print("🧪 Testing Orchestrator API (hermetic)...")
-    
+
     try:
         # Test health endpoint
         print("Testing /healthz...")
@@ -23,7 +25,7 @@ def test_orchestrator():
         data = response.json()
         assert data.get("ok") is True
         print("✅ /healthz passed")
-        
+
         # Test ready endpoint
         print("Testing /readyz...")
         response = client.get("/readyz")
@@ -31,7 +33,7 @@ def test_orchestrator():
         data = response.json()
         assert data.get("ready") is True
         print("✅ /readyz passed")
-        
+
         # Test config endpoint
         print("Testing /v1/config...")
         response = client.get("/v1/config")
@@ -41,7 +43,7 @@ def test_orchestrator():
         assert "agents" in config
         assert "log" in config
         print("✅ /v1/config passed")
-        
+
         # Test plan endpoint
         print("Testing /v1/runs/plan...")
         plan_data = {
@@ -65,10 +67,10 @@ def test_orchestrator():
         # The actual status returned is "success", not "started"
         assert result["status"] in ["started", "success"]
         print("✅ /v1/runs/plan passed")
-        
+
         print("\n🎉 All tests passed!")
         return True
-        
+
     except Exception as e:
         print(f"❌ Test failed: {e}")
         return False

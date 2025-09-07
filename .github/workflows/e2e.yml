@@ -62,6 +62,6 @@ jobs:
       - name: Stop
         if: always()
         run: |
-          kill $(cat console.pid) || true
-          kill $(cat daemon.pid) || true
-          kill $(cat uvicorn.pid) || true
+          for f in console.pid daemon.pid uvicorn.pid; do
+            if [ -f "$f" ]; then kill "$(cat "$f")" || true; fi
+          done

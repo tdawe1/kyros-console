@@ -14,6 +14,23 @@ wss.on("connection", (socket) => {
   let shell = os.platform() === "win32" ? "powershell.exe" : process.env.SHELL || "bash";
   let cols = 80, rows = 24;
   let p = null;
+  let bytesSent = 0;
+  const MAX_BYTES = 10 * 1024 * 1024; // 10MB limit
+
+  const checkByteLimit = (data) => {
+    const dataBytes = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(data, 'utf8');
+    bytesSent += dataBytes;
+    if (bytesSent > MAX_BYTES) {
+      console.log(`[kyros-daemon] Session exceeded byte limit (${bytesSent}/${MAX_BYTES})`);
+      if (p) {
+        try { p.kill(); } catch {}
+      }
+      socket.close();
+      return false;
+    }
+    return true;
+  };
+
   socket.on("message", (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
@@ -21,7 +38,11 @@ wss.on("connection", (socket) => {
         if (msg.shell && msg.shell !== "auto") shell = msg.shell;
         cols = msg.cols || cols; rows = msg.rows || rows;
         p = pty.spawn(shell, [], { name: "xterm-color", cols, rows, cwd: process.cwd(), env: process.env });
-        p.onData((d) => socket.send(Buffer.from(d)));
+        p.onData((d) => {
+          if (checkByteLimit(d)) {
+            socket.send(Buffer.from(d));
+          }
+        });
         p.onExit(({ exitCode }) => socket.send(JSON.stringify({ type: "exit", code: exitCode })));
       } else if (msg.type === "input" && p) { p.write(msg.data); }
       else if (msg.type === "resize" && p) { p.resize(msg.cols, msg.rows); socket.send(JSON.stringify({ type: "resize", cols: msg.cols, rows: msg.rows })); }

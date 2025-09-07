@@ -1,8 +1,8 @@
-from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional, Callable, Awaitable
 from abc import ABC, abstractmethod
-import asyncio
-import json
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
 
 class ToolExample(BaseModel):
     """Example of tool usage with input and expected output."""
@@ -21,7 +21,7 @@ class ToolSchema(BaseModel):
 
 class ToolExecutor(ABC):
     """Abstract base class for tool execution."""
-    
+
     @abstractmethod
     async def execute(self, name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with given parameters."""
@@ -29,44 +29,44 @@ class ToolExecutor(ABC):
 
 class ToolRegistry:
     """Registry for managing tools and their execution."""
-    
+
     def __init__(self):
         self._tools: Dict[str, ToolSchema] = {}
         self._executors: Dict[str, ToolExecutor] = {}
-    
+
     def register(self, tool: ToolSchema, executor: Optional[ToolExecutor] = None):
         """Register a tool schema and optionally its executor."""
         self._tools[tool.name] = tool
         if executor:
             self._executors[tool.name] = executor
-    
+
     def get(self, name: str) -> Optional[ToolSchema]:
         """Get tool schema by name."""
         return self._tools.get(name)
-    
+
     def get_executor(self, name: str) -> Optional[ToolExecutor]:
         """Get tool executor by name."""
         return self._executors.get(name)
-    
+
     def discover(self, capabilities: List[str]) -> List[ToolSchema]:
         """Discover tools that match given capabilities."""
         if not capabilities:
             return list(self._tools.values())
-        
+
         matching_tools = []
         for tool in self._tools.values():
             if not tool.capabilities or all(cap in capabilities for cap in tool.capabilities):
                 matching_tools.append(tool)
         return matching_tools
-    
+
     def list_all(self) -> List[ToolSchema]:
         """List all registered tools."""
         return list(self._tools.values())
-    
+
     async def execute_tool(self, name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool by name with parameters."""
         executor = self.get_executor(name)
         if not executor:
             raise ValueError(f"No executor found for tool: {name}")
-        
+
         return await executor.execute(name, parameters)

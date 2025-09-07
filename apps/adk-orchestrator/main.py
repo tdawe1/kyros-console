@@ -1,20 +1,25 @@
-import os, uuid, json, logging, yaml
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+import logging
+import os
 
 # Import Agent SDK components
 import sys
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+import yaml
+from fastapi import APIRouter, FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "packages"))
 
+from agent_sdk.capabilities.negotiator import CapabilityNegotiator
 from agent_sdk.contracts import AgentBase, AgentContext
 from agent_sdk.memory.sqlite_store import SQLiteMemoryStore
-from agent_sdk.tools.protocol import ToolRegistry
 from agent_sdk.sandbox.subprocess_executor import SubprocessSandbox
-from agent_sdk.capabilities.negotiator import CapabilityNegotiator
-from agent_sdk.protocol.messages import AgentMessage
+from agent_sdk.tools.protocol import ToolRegistry
 
 # --- simple JSON logger ---
 logging.basicConfig(level=logging.INFO, format='{"level":"%(levelname)s","msg":"%(message)s"}')
@@ -56,11 +61,11 @@ class AppConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore"
     )
-    
+
     services: ServicesConfig = ServicesConfig()
     agents: AgentsConfig = AgentsConfig()
     log: LogConfig = LogConfig()
-    
+
     # Environment variables for model configuration
     llm_router_base: str = "http://localhost:4000"
     model_planner: str = "gpt-5-high"
@@ -71,22 +76,22 @@ class AppConfig(BaseSettings):
 def load_config():
     """Load configuration from YAML files and environment variables"""
     base_path = os.path.join(os.path.dirname(__file__), "config")
-    
+
     def read_yaml(name):
         p = os.path.join(base_path, name)
         return yaml.safe_load(open(p)) if os.path.exists(p) else {}
-    
+
     # Load YAML configs
     yaml_config = {}
     for part in ("base.yaml", "development.yaml"):
         yaml_config.update(read_yaml(part))
-    
+
     # Create settings instance
     settings = AppConfig()
-    
+
     # Merge YAML config with settings
     config_dict = settings.model_dump()
-    
+
     # Override with YAML values if they exist
     if "services" in yaml_config:
         config_dict["services"].update(yaml_config["services"])
@@ -94,12 +99,15 @@ def load_config():
         config_dict["agents"].update(yaml_config["agents"])
     if "log" in yaml_config:
         config_dict["log"].update(yaml_config["log"])
-    
+
     return config_dict
 
 # --- DTOs ---
 class PRRef(BaseModel):
-    repo: str; pr_number: int; branch: str; head_sha: str
+    repo: str
+    pr_number: int
+    branch: str
+    head_sha: str
     html_url: Optional[str] = None
 
 class RunRequest(BaseModel):
@@ -109,7 +117,10 @@ class RunRequest(BaseModel):
     extra: Dict[str, Any] = {}
 
 class RunResponse(BaseModel):
-    run_id: str; status: str; started_at: str; notes: Optional[str] = None
+    run_id: str
+    status: str
+    started_at: str
+    notes: Optional[str] = None
 
 # --- Global configuration instance ---
 config = load_config()
@@ -117,7 +128,7 @@ config = load_config()
 # --- Agent SDK Integration ---
 class AgentOrchestrator:
     """Orchestrator for managing agents and their interactions."""
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.memory_store = SQLiteMemoryStore(
@@ -127,10 +138,10 @@ class AgentOrchestrator:
         self.sandbox = SubprocessSandbox()
         self.negotiator = CapabilityNegotiator()
         self.agents: Dict[str, AgentBase] = {}
-        
+
         # Initialize with example agent if available
         self._initialize_agents()
-    
+
     def _initialize_agents(self):
         """Initialize available agents."""
         try:
@@ -139,34 +150,34 @@ class AgentOrchestrator:
             self.register_agent(example_agent)
         except ImportError:
             log.warning("Example agent not available")
-    
+
     def register_agent(self, agent: AgentBase):
         """Register an agent with the orchestrator."""
         agent_id = agent.get_name()
         self.agents[agent_id] = agent
-        
+
         # Register with capability negotiator
         capabilities = agent.capabilities()
         self.negotiator.register_agent(agent, capabilities)
-        
+
         log.info(json.dumps({
             "event": "agent_registered",
             "agent_id": agent_id,
             "capabilities": capabilities
         }))
-    
+
     async def execute_task(self, task: Dict[str, Any], mode: str) -> Dict[str, Any]:
         """Execute a task using the best available agent."""
         # Find best agent for the task
         best_agent, missing_caps = self.negotiator.match(task)
-        
+
         if not best_agent:
             return {
                 "status": "error",
                 "error": "No suitable agent found",
                 "missing_capabilities": missing_caps
             }
-        
+
         # Create agent context
         context = AgentContext(
             task=task,
@@ -175,11 +186,11 @@ class AgentOrchestrator:
             telemetry={"mode": mode, "timestamp": datetime.utcnow().isoformat()},
             tenant_id=task.get("tenant_id")
         )
-        
+
         # Execute with the selected agent
         try:
             result = await best_agent.execute(context)
-            
+
             # Log the interaction
             log.info(json.dumps({
                 "event": "task_executed",
@@ -189,9 +200,9 @@ class AgentOrchestrator:
                 "status": result.get("status", "unknown"),
                 "rationale_summary": result.get("message", {}).get("rationale_summary", "")
             }))
-            
+
             return result
-            
+
         except Exception as e:
             log.error(json.dumps({
                 "event": "task_execution_error",
@@ -204,11 +215,11 @@ class AgentOrchestrator:
                 "error": str(e),
                 "agent_id": best_agent.get_name()
             }
-    
+
     async def get_agent_status(self) -> Dict[str, Any]:
         """Get status of all registered agents."""
         return self.negotiator.get_agent_status()
-    
+
     async def cleanup(self):
         """Clean up resources."""
         await self.sandbox.cleanup()
@@ -219,7 +230,7 @@ orchestrator = AgentOrchestrator(config)
 # --- very small "workflow" shim (will call engine later) ---
 def run_with_engine(mode: str, pr: PRRef, labels: List[str], extra: Dict[str, Any]) -> str:
     """Simulate running a workflow with the engine"""
-    needs_deep = any(l in labels for l in ["needs:deep-refactor", "complex"])
+    needs_deep = any(label in labels for label in ["needs:deep-refactor", "complex"])
     impl = config.get("model_deep", "claude-4-sonnet") if needs_deep else config.get("model_impl", "gemini-2.5-pro")
     planner = config.get("model_planner", "gpt-5-high")
     return f"[{mode}] {pr.repo}#{pr.pr_number} ({pr.branch}) planner={planner} impl={impl}"
@@ -237,7 +248,7 @@ async def runs_plan(req: RunRequest):
     """Start a plan run for a pull request"""
     try:
         run_id = str(uuid.uuid4())
-        
+
         # Create task for agent execution
         task = {
             "id": run_id,
@@ -249,17 +260,17 @@ async def runs_plan(req: RunRequest):
             "capabilities": ["planning", "analysis"],
             "priority": 1
         }
-        
+
         # Execute task using orchestrator
         result = await orchestrator.execute_task(task, "plan")
-        
+
         # Extract rationale summary for logging
         rationale_summary = ""
         if "message" in result and isinstance(result["message"], dict):
             rationale_summary = result["message"].get("rationale_summary", "")
         elif "rationale_summary" in result:
             rationale_summary = result["rationale_summary"]
-        
+
         log.info(json.dumps({
             "event": "run_started",
             "run_id": run_id,
@@ -269,7 +280,7 @@ async def runs_plan(req: RunRequest):
             "status": result.get("status", "unknown"),
             "rationale_summary": rationale_summary
         }))
-        
+
         return RunResponse(
             run_id=run_id,
             status=result.get("status", "started"),
@@ -285,7 +296,7 @@ async def runs_implement(req: RunRequest):
     """Start an implement run for a pull request"""
     try:
         run_id = str(uuid.uuid4())
-        
+
         # Create task for agent execution
         task = {
             "id": run_id,
@@ -297,10 +308,10 @@ async def runs_implement(req: RunRequest):
             "capabilities": ["implementation", "coding"],
             "priority": 2
         }
-        
+
         # Execute task using orchestrator
         result = await orchestrator.execute_task(task, "implement")
-        
+
         log.info(json.dumps({
             "event": "run_started",
             "run_id": run_id,
@@ -309,7 +320,7 @@ async def runs_implement(req: RunRequest):
             "pr_number": req.pr.pr_number,
             "status": result.get("status", "unknown")
         }))
-        
+
         return RunResponse(
             run_id=run_id,
             status=result.get("status", "started"),
@@ -325,7 +336,7 @@ async def runs_critic(req: RunRequest):
     """Start a critic run for a pull request"""
     try:
         run_id = str(uuid.uuid4())
-        
+
         # Create task for agent execution
         task = {
             "id": run_id,
@@ -337,10 +348,10 @@ async def runs_critic(req: RunRequest):
             "capabilities": ["review", "critique", "analysis"],
             "priority": 1
         }
-        
+
         # Execute task using orchestrator
         result = await orchestrator.execute_task(task, "critic")
-        
+
         log.info(json.dumps({
             "event": "run_started",
             "run_id": run_id,
@@ -349,7 +360,7 @@ async def runs_critic(req: RunRequest):
             "pr_number": req.pr.pr_number,
             "status": result.get("status", "unknown")
         }))
-        
+
         return RunResponse(
             run_id=run_id,
             status=result.get("status", "started"),
