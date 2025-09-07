@@ -30,11 +30,12 @@ jobs:
           curl -fsS http://127.0.0.1:8080/healthz >/dev/null
       - name: Generate dev JWT
         run: |
-          python - <<'PY' >> $GITHUB_ENV
-import datetime, jwt
-token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
-print(f'DEV_JWT={token}')
-PY
+          python - <<'PY' > dev.env
+          import datetime, jwt
+          token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
+          print(f'DEV_JWT={token}')
+          PY
+          cat dev.env >> "$GITHUB_ENV"
       - name: Schemathesis against /v1
         run: |
           schemathesis run api-specs/orchestrator-v1.yaml --base-url http://127.0.0.1:8080 \

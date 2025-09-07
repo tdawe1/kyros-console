@@ -28,12 +28,13 @@ jobs:
           cd apps/console && npx playwright install --with-deps
       - name: Generate dev JWT
         run: |
-          python - <<'PY' >> $GITHUB_ENV
-import datetime, jwt
-token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
-print(f'DEV_JWT={token}')
-print(f'NEXT_PUBLIC_DEV_BEARER={token}')
-PY
+          python - <<'PY' > dev.env
+          import datetime, jwt
+          token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
+          print(f'DEV_JWT={token}')
+          print(f'NEXT_PUBLIC_DEV_BEARER={token}')
+          PY
+          cat dev.env >> "$GITHUB_ENV"
       - name: Start services
         run: |
           uvicorn apps/adk-orchestrator.main:app --host 127.0.0.1 --port 8080 &
