@@ -1,12 +1,36 @@
 import os, uuid, json, logging, yaml
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from security.jwt import get_principal, get_tenant
+from security.models import Principal, TenantContext
 
 # --- simple JSON logger ---
 logging.basicConfig(level=logging.INFO, format='{"level":"%(levelname)s","msg":"%(message)s"}')
 log = logging.getLogger("kyros")
+
+# --- Security Headers Middleware ---
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Set security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "accelerometer=(), geolocation=(), microphone=()"
+        
+        # Only set HSTS in production (commented in dev)
+        if os.getenv("NODE_ENV") == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+        return response
 
 # --- config loader ---
 def load_config():
@@ -45,13 +69,52 @@ def run_with_engine(mode: str, pr: PRRef, labels: List[str], extra: Dict[str, An
 
 # --- FastAPI setup ---
 app = FastAPI(title="Kyros Orchestrator")
+
+# Add security middleware (order matters - added in reverse order of execution)
+config = load_config()
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Add trusted host middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "*.localhost"]
+)
+
+# Add GZip compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Add CORS middleware
+cors_origins = config.get("cors", {}).get("allowed_origins", ["http://localhost:3001"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=False,  # Token-only auth, no cookies
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api = APIRouter(prefix="/v1")
 
 @api.post("/runs/plan", response_model=RunResponse)
-def runs_plan(req: RunRequest):
+def runs_plan(
+    req: RunRequest,
+    principal: Principal = Depends(get_principal),
+    tenant: TenantContext = Depends(get_tenant)
+):
     run_id = str(uuid.uuid4())
     notes = run_with_engine("plan", req.pr, req.labels, req.extra)
-    log.info(json.dumps({"event":"run_started","run_id":run_id,"mode":"plan"}))
+    
+    # Log with request context
+    log.info(json.dumps({
+        "event": "run_started",
+        "request_id": run_id,
+        "actor": principal.sub,
+        "tenant_id": tenant.id,
+        "mode": "plan"
+    }))
+    
     return RunResponse(run_id=run_id, status="started", started_at=datetime.utcnow().isoformat()+"Z", notes=notes)
 
 # other run endpoints would be similar

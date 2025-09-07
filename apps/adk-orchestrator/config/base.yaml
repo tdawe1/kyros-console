@@ -6,3 +6,13 @@ agents:
   sandbox: { enabled: true, timeout_seconds: 30, memory_limit_mb: 512 }
   memory:  { vector_store: false, history_limit: 100 }
   tools:   { auto_discover: true, validation: strict }
+auth:
+  issuer: "kyros-dev"
+  audience: "kyros-api"
+  alg: "HS256"
+  shared_secret_env: "JWT_SECRET"
+tenancy:
+  default_rate_rps: 5
+  default_model_caps: {}
+cors:
+  allowed_origins: ["http://localhost:3001"]
