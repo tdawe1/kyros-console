@@ -1,6 +1,9 @@
 from pydantic import BaseModel
+
+
 class ValidationResult(BaseModel):
-    ok: bool; findings: list[str]=[]
+    ok: bool
+    findings: list[str] = []
 class OutputValidator:
     async def validate_code(self, path:str)->ValidationResult: return ValidationResult(ok=True)
     async def validate_against_dod(self, artifacts:list[dict], dod:list[str])->ValidationResult:

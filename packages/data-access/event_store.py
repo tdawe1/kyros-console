@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Iterable
 
+
 class EventStore(ABC):
     @abstractmethod
     async def append(self, stream_id: str, events: list[dict], expected_version: int|None=None): ...

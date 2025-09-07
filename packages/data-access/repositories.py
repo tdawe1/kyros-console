@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Protocol, Iterable, Any
+from typing import Protocol
+
 
 class UnitOfWork(Protocol):
     async def __aenter__(self): ...
