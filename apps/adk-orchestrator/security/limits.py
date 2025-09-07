@@ -4,9 +4,6 @@ from slowapi.errors import RateLimitExceeded
 from fastapi import Request
 from typing import Optional
 
-# Create limiter instance
-limiter = Limiter(key_func=get_remote_address)
-
 def limiter_key_func(request: Request) -> str:
     """
     Rate limiter key function that uses tenant_id if available,
@@ -19,6 +16,9 @@ def limiter_key_func(request: Request) -> str:
     
     # Fallback to client IP
     return get_remote_address(request)
+
+# Create limiter instance with custom key function
+limiter = Limiter(key_func=limiter_key_func)
 
 def rate_limit_context(request: Request, tenant_id: Optional[str] = None) -> None:
     """

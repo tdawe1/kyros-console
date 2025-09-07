@@ -7,9 +7,14 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from security.jwt import get_principal, get_tenant
 from security.models import Principal, TenantContext
+from security.limits import limiter, limiter_key_func, rate_limit_context
+from billing.budget import enforce_budget
 
 # --- simple JSON logger ---
 logging.basicConfig(level=logging.INFO, format='{"level":"%(levelname)s","msg":"%(message)s"}')
@@ -70,6 +75,10 @@ def run_with_engine(mode: str, pr: PRRef, labels: List[str], extra: Dict[str, An
 # --- FastAPI setup ---
 app = FastAPI(title="Kyros Orchestrator")
 
+# Add SlowAPI middleware for rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Add security middleware (order matters - added in reverse order of execution)
 config = load_config()
 
@@ -98,11 +107,19 @@ app.add_middleware(
 api = APIRouter(prefix="/v1")
 
 @api.post("/runs/plan", response_model=RunResponse)
+@limiter.limit("5/second")  # TODO: Read from config
 def runs_plan(
+    request: Request,
     req: RunRequest,
     principal: Principal = Depends(get_principal),
     tenant: TenantContext = Depends(get_tenant)
 ):
+    # Set tenant context for rate limiting
+    rate_limit_context(request, tenant.id)
+    
+    # Enforce budget before starting run
+    enforce_budget(tenant, estimated_cents=5)
+    
     run_id = str(uuid.uuid4())
     notes = run_with_engine("plan", req.pr, req.labels, req.extra)
     
