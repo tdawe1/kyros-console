@@ -19,19 +19,24 @@ jobs:
           pip install schemathesis
       - name: Start orchestrator
         run: |
-          cd apps/adk-orchestrator && uvicorn main:app --host 0.0.0.0 --port 8080 &
+          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH}"
+          (cd apps/adk-orchestrator && PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH}" uvicorn main:app --host 127.0.0.1 --port 8080) > uvicorn.log 2>&1 &
           echo $! > uvicorn.pid
           # Wait for backend readiness
           for i in {1..30}; do
-            if curl -fsS http://localhost:8080/readyz >/dev/null; then
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null; then
               break
             fi
             sleep 1
           done
-          curl -fsS http://localhost:8080/healthz >/dev/null
+          if ! curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+            echo "::error::Orchestrator failed to become healthy"
+            head -n 200 uvicorn.log
+            exit 1
+          fi
       - name: Schemathesis against /v1
         run: |
-          schemathesis run api-specs/orchestrator-v1.yaml --base-url http://localhost:8080 \
+          schemathesis run api-specs/orchestrator-v1.yaml --base-url http://127.0.0.1:8080 \
             --checks all --hypothesis-max-examples=50 \
             --endpoint "/v1/runs/plan" --stateful=links
       - name: Stop
