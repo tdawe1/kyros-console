@@ -8,6 +8,9 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      CI: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,21 +26,39 @@ jobs:
       - name: Install Playwright
         run: |
           cd apps/console && npx playwright install --with-deps
+      - name: Generate dev JWT
+        run: |
+          python - <<'PY'
+          import datetime, jwt, os
+          payload = {
+              "sub": "dev",
+              "tenant_id": "dev",
+              "scopes": [],
+              "iss": "kyros-dev",
+              "aud": "kyros-api",
+              "iat": datetime.datetime.utcnow(),
+              "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
+          }
+          token = jwt.encode(payload, "devsecret", algorithm="HS256")
+          with open(os.environ['GITHUB_ENV'], 'a') as fh:
+              fh.write(f"DEV_JWT={token}\n")
+          PY
       - name: Start services
         run: |
-          uvicorn apps.adk-orchestrator.main:app --host 0.0.0.0 --port 8080 &
+          uvicorn apps.adk-orchestrator.main:app --host 127.0.0.1 --port 8080 &
           echo $! > uvicorn.pid
           (cd apps/terminal-daemon && node server.js) &
           echo $! > daemon.pid
-          (cd apps/console && PORT=3001 npm run dev) &
+          (cd apps/console && NEXT_PUBLIC_DEV_BEARER=$DEV_JWT PORT=3001 npm run dev &) 
           echo $! > console.pid
-          sleep 8
+          for i in {1..30}; do curl -fsS http://127.0.0.1:8080/healthz && break || sleep 1; done
+          for i in {1..30}; do curl -fsS http://127.0.0.1:3001 && break || sleep 1; done
       - name: Smoke test – click "Run Plan"
         run: |
           cat > apps/console/e2e.spec.ts <<'TS'
           import { test, expect } from '@playwright/test';
           test('run plan returns JSON', async ({ page }) => {
-            await page.goto('http://localhost:3001/');
+            await page.goto('http://127.0.0.1:3001/');
             await page.getByRole('button', { name: 'Run Plan' }).click();
             await expect(page.locator('pre')).toContainText('run_id');
           });

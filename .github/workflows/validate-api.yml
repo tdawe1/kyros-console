@@ -15,91 +15,46 @@ on:
 jobs:
   validate-api:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install fastapi uvicorn pydantic pydantic-settings PyYAML
-        pip install openapi-spec-validator
-    
-    - name: Validate OpenAPI spec
-      run: |
-        python -c "
-        import yaml
-        from openapi_spec_validator import validate_spec
-        
-        # Load and validate the API spec
-        with open('api-specs/orchestrator-v1.yaml', 'r') as f:
-            spec = yaml.safe_load(f)
-        
-        try:
-            validate_spec(spec)
-            print('✅ OpenAPI specification is valid')
-        except Exception as e:
-            print(f'❌ OpenAPI specification validation failed: {e}')
-            exit(1)
-        "
-    
-    - name: Test API endpoints
-      run: |
-        cd apps/adk-orchestrator
-        python -c "
-        import sys
-        sys.path.append('../../packages')
-        
-        from main import app
-        from fastapi.testclient import TestClient
-        
-        client = TestClient(app)
-        
-        # Test health endpoints
-        health_response = client.get('/healthz')
-        assert health_response.status_code == 200
-        assert health_response.json() == {'ok': True}
-        print('✅ /healthz endpoint working')
-        
-        ready_response = client.get('/readyz')
-        assert ready_response.status_code == 200
-        assert ready_response.json() == {'ready': True}
-        print('✅ /readyz endpoint working')
-        
-        # Test config endpoint
-        config_response = client.get('/v1/config')
-        assert config_response.status_code == 200
-        config_data = config_response.json()
-        assert 'services' in config_data
-        assert 'agents' in config_data
-        assert 'log' in config_data
-        print('✅ /v1/config endpoint working')
-        
-        # Test plan endpoint with valid data
-        plan_data = {
-            'pr': {
-                'repo': 'test/repo',
-                'pr_number': 123,
-                'branch': 'feature/test',
-                'head_sha': 'abc123'
-            },
-            'mode': 'plan',
-            'labels': ['test'],
-            'extra': {}
-        }
-        
-        plan_response = client.post('/v1/runs/plan', json=plan_data)
-        assert plan_response.status_code == 200
-        plan_result = plan_response.json()
-        assert 'run_id' in plan_result
-        assert 'status' in plan_result
-        assert 'started_at' in plan_result
-        print('✅ /v1/runs/plan endpoint working')
-        
-        print('🎉 All API endpoints validated successfully!')
-        "
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/adk-orchestrator/requirements.txt
+          pip install requests PyYAML
+      - name: Start orchestrator
+        run: |
+          uvicorn apps.adk-orchestrator.main:app --host 127.0.0.1 --port 8080 &
+          echo $! > uvicorn.pid
+          for i in {1..30}; do curl -fsS http://127.0.0.1:8080/healthz && break || sleep 1; done
+      - name: Generate dev JWT
+        run: |
+          python - <<'PY'
+          import datetime, jwt, os
+          payload = {
+              "sub": "dev",
+              "tenant_id": "dev",
+              "scopes": [],
+              "iss": "kyros-dev",
+              "aud": "kyros-api",
+              "iat": datetime.datetime.utcnow(),
+              "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
+          }
+          token = jwt.encode(payload, "devsecret", algorithm="HS256")
+          with open(os.environ['GITHUB_ENV'], 'a') as fh:
+              fh.write(f"DEV_JWT={token}\n")
+          PY
+      - name: Validate API
+        env:
+          API_BASE_URL: http://127.0.0.1:8080
+          DEV_JWT: ${{ env.DEV_JWT }}
+        run: |
+          python scripts/validate-api.py
+      - name: Stop
+        if: always()
+        run: kill $(cat uvicorn.pid) || true
+
