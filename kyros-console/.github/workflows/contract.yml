@@ -2,7 +2,7 @@ name: Contract
 on:
   pull_request:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   contract:
@@ -11,40 +11,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with: { python-version: "3.11" }
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -r apps/adk-orchestrator/requirements.txt
           pip install schemathesis PyJWT
       - name: Generate dev JWT
+        id: jwt
         run: |
-          python - <<'PY' > dev.env
-          import datetime, jwt
-          token = jwt.encode({'sub': 'dev', 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=5)}, 'dev-secret', algorithm='HS256')
-          print(f'DEV_JWT={token}')
-          PY
-          cat dev.env >> "$GITHUB_ENV"
+          python -c "import jwt; import os; token = jwt.encode({'name': 'dev', 'exp': 9999999999}, 'secret', algorithm='HS256'); print(f'::set-output name=token::{token}')"
       - name: Start orchestrator
         run: |
-          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH}"
-          (cd apps/adk-orchestrator && PYTHONPATH="${PYTHONPATH}" uvicorn main:app --host 127.0.0.1 --port 8080) > uvicorn.log 2>&1 &
+          cd apps/adk-orchestrator && uvicorn main:app --host 127.0.0.1 --port 8080 &
           echo $! > uvicorn.pid
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
-              echo "Orchestrator health check passed"
+          # Wait for backend readiness
+          for i in {1..30};
+          do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
               break
             fi
-            echo "Waiting for orchestrator... ($i/30)"
             sleep 1
           done
-          if ! curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
-            echo "Orchestrator health check failed after 30 seconds"
-            echo "=== Uvicorn logs ==="
-            cat uvicorn.log || echo "No uvicorn.log found"
-            exit 1
-          fi
+          curl -fsS http://127.0.0.1:8080/healthz >/dev/null
       - name: Schemathesis against /v1
+        env:
+          DEV_JWT: ${{ steps.jwt.outputs.token }}
         run: |
           schemathesis run api-specs/orchestrator-v1.yaml --base-url http://127.0.0.1:8080 \
             --checks all --hypothesis-max-examples=50 \
