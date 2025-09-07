@@ -8,6 +8,10 @@ The Kyros Orchestrator provides a versioned API for managing agent runs and syst
 - **Health Checks**: `/healthz` and `/readyz` endpoints for monitoring
 - **Configuration Management**: `/v1/config` endpoint for system settings
 - **Agent Runs**: Support for plan, implement, critic, integrate, and pipeline modes
+- **Security Headers**: Comprehensive security headers for production deployment
+- **Token-Only Authentication**: JWT-based auth with no cookie support
+- **Rate Limiting**: Configurable per-tenant rate limiting
+- **Trusted Hosts**: Host validation for additional security
 - **Pydantic Settings**: Type-safe configuration management
 - **OpenAPI Specification**: Full API documentation in `api-specs/orchestrator-v1.yaml`
 
@@ -89,6 +93,46 @@ curl -X POST "http://localhost:8000/v1/runs/plan" \
 ```bash
 curl "http://localhost:8000/v1/config"
 ```
+
+## Security
+
+### Authentication
+
+The Kyros Orchestrator uses **token-only authentication** with JWT tokens in the `Authorization` header:
+
+```bash
+curl -X POST "http://localhost:8000/v1/runs/plan" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"pr": {...}, "mode": "plan"}'
+```
+
+**Important**: Cookies are not supported for authentication. All requests must include a valid JWT token in the Authorization header.
+
+### Security Headers
+
+The orchestrator automatically adds the following security headers to all responses:
+
+- `X-Content-Type-Options: nosniff` - Prevents MIME type sniffing
+- `X-Frame-Options: DENY` - Prevents clickjacking attacks  
+- `Referrer-Policy: no-referrer` - Controls referrer information
+- `Permissions-Policy: accelerometer=(), geolocation=(), microphone=()` - Restricts browser APIs
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` - Forces HTTPS (production only)
+
+### Host Validation
+
+Requests are validated against trusted hosts:
+- `localhost` (development)
+- `127.0.0.1` (development)
+- `*.localhost` (development)
+
+Configure additional trusted hosts via the `TRUSTED_HOSTS` environment variable.
+
+### Rate Limiting
+
+API endpoints are rate-limited per tenant:
+- Default: 5 requests per second per tenant
+- Configure via the rate limiting configuration
 
 ## Architecture
 

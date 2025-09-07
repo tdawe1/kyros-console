@@ -25,6 +25,18 @@ def test_orchestrator():
         assert data["ok"] == True
         print("✅ /healthz passed")
         
+        # Test security headers on health endpoint
+        print("Testing security headers on /healthz...")
+        headers = response.headers
+        assert headers.get("X-Content-Type-Options") == "nosniff"
+        assert headers.get("X-Frame-Options") == "DENY"
+        assert headers.get("Referrer-Policy") == "no-referrer"
+        assert headers.get("Permissions-Policy") == "accelerometer=(), geolocation=(), microphone=()"
+        # HSTS should only be present in production
+        if os.getenv("NODE_ENV") == "production":
+            assert headers.get("Strict-Transport-Security") == "max-age=31536000; includeSubDomains"
+        print("✅ Security headers test passed")
+        
         # Test ready endpoint
         print("Testing /readyz...")
         response = requests.get(f"{base_url}/readyz", timeout=5)
