@@ -28,6 +28,10 @@ jobs:
             node:
               - 'apps/console/**'
               - 'apps/terminal-daemon/**'
+              - 'server/**'
+              - 'shared/**'
+              - 'package.json'
+              - 'package-lock.json'
               - 'packages/**.ts'
               - 'packages/**/**.ts'
 
@@ -82,10 +86,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: |
-            apps/console/package.json
-            apps/terminal-daemon/package.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('apps/console/package-lock.json', 'apps/terminal-daemon/package-lock.json') }}
       - name: Install
         run: |
           cd apps/console && npm ci

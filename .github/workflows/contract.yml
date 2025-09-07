@@ -19,14 +19,37 @@ jobs:
           pip install schemathesis
       - name: Start orchestrator
         run: |
-          uvicorn apps.adk-orchestrator.main:app --host 0.0.0.0 --port 8080 &
+          uvicorn apps.adk-orchestrator.main:app --host 127.0.0.1 --port 8080 &
           echo $! > uvicorn.pid
-          sleep 3
+      - name: Wait for health
+        run: |
+          for i in {1..30}; do
+            curl -fsS http://127.0.0.1:8080/healthz && break
+            sleep 1
+          done
+      - name: Generate dev JWT
+        run: |
+          python - <<'PY'
+          import datetime, jwt, os
+          payload = {
+              "sub": "dev",
+              "tenant_id": "dev",
+              "scopes": [],
+              "iss": "kyros-dev",
+              "aud": "kyros-api",
+              "iat": datetime.datetime.utcnow(),
+              "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
+          }
+          token = jwt.encode(payload, "devsecret", algorithm="HS256")
+          with open(os.environ['GITHUB_ENV'], 'a') as fh:
+              fh.write(f"DEV_JWT={token}\n")
+          PY
       - name: Schemathesis against /v1
         run: |
-          schemathesis run api-specs/orchestrator-v1.yaml --base-url http://localhost:8080 \
+          schemathesis run api-specs/orchestrator-v1.yaml --base-url http://127.0.0.1:8080 \
             --checks all --hypothesis-max-examples=50 \
-            --endpoint "/v1/runs/plan" --stateful=links
+            --endpoint "/v1/runs/plan" --stateful=links \
+            -H "Authorization: Bearer $DEV_JWT"
       - name: Stop
         if: always()
         run: kill $(cat uvicorn.pid) || true
