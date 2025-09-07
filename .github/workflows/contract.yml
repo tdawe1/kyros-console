@@ -21,13 +21,22 @@ jobs:
         run: |
           cd apps/adk-orchestrator && uvicorn main:app --host 127.0.0.1 --port 8080 &
           echo $! > uvicorn.pid
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+          echo "Waiting for orchestrator to start..."
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+              echo "Orchestrator started successfully after ${i} seconds"
               break
             fi
+            echo "Attempt ${i}/60: Orchestrator not ready yet..."
             sleep 1
           done
-          curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+          # Final check with error reporting
+          if ! curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+            echo "❌ Orchestrator failed to start after 60 seconds"
+            echo "Process status:"
+            ps aux | grep uvicorn || echo "No uvicorn processes found"
+            exit 1
+          fi
       - name: Generate dev JWT
         run: |
           python - <<'PY' >> $GITHUB_ENV
