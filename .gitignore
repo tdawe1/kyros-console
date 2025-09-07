@@ -11,3 +11,30 @@ data/
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# Next.js
+.next/
+out/
+
+# Build artifacts
+*.pyc
+*.pyo
+*.egg-info/
+build/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Temporary files
+tmp/
+*.tmp
